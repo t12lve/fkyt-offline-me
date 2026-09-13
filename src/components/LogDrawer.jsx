@@ -32,15 +32,15 @@ export function LogDrawer({ logs, onClearLogs }) {
   };
 
   return (
-    <div className="w-full glass-panel rounded-2xl border-purple-500/20 overflow-hidden transition-all shadow-lg">
+    <div className="w-full glass-panel rounded-xl border-purple-500/20 overflow-hidden transition-all shadow-md shrink-0">
       {/* Header / Toggle bar */}
       <div 
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-between px-5 py-3 bg-psylocke-surface/80 hover:bg-psylocke-surface cursor-pointer select-none transition-colors"
+        className="flex items-center justify-between px-3.5 py-1.5 bg-psylocke-surface/80 hover:bg-psylocke-surface cursor-pointer select-none transition-colors"
       >
-        <div className="flex items-center gap-2.5">
-          <Terminal className="w-4 h-4 text-fuchsia-400" />
-          <span className="text-xs font-semibold uppercase tracking-wider text-purple-200">
+        <div className="flex items-center gap-2">
+          <Terminal className="w-3.5 h-3.5 text-fuchsia-400" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-purple-200">
             Journal d'Exécution & Debug
           </span>
           <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-900/40 text-purple-300 border border-purple-500/20">

@@ -154,156 +154,265 @@ pub async fn start_download(
 
                 let track_id = track.id.clone();
                 let track_url = track.url.unwrap_or_else(|| format!("https://www.youtube.com/watch?v={}", track_id));
-
-                // Notification début de téléchargement
-                let _ = app.emit(
-                    "track-status",
-                    serde_json::json!({
-                        "id": track_id,
-                        "status": "Downloading",
-                        "progress": 0.0,
-                        "speed": "0 KiB/s"
-                    }),
-                );
-
-                emit_log(&app, "ytdlp", &format!("Démarrage: {}", track.title));
-
                 let ffmpeg_dir = ffmpeg.parent().unwrap_or(Path::new(""));
 
-                let mut cmd = Command::new(&ytdlp);
-                cmd.creation_flags(CREATE_NO_WINDOW);
-                cmd.args(&[
-                    "--ffmpeg-location",
-                    &ffmpeg_dir.to_string_lossy(),
-                    "-x",
-                    "--audio-format",
-                    "mp3",
-                    "--audio-quality",
-                    &quality,
-                    "--embed-thumbnail",
-                    "--embed-metadata",
-                    "--add-metadata",
-                    "--parse-metadata",
-                    &format!("{}:%(album)s", album_name),
-                    "-o",
-                    &format!("{}/%(title)s.%(ext)s", out_folder),
-                    "--newline",
-                    "--progress-template",
-                    "download:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
-                    "--no-playlist",
-                    &track_url,
-                ]);
-
-                cmd.stdout(std::process::Stdio::piped());
-                cmd.stderr(std::process::Stdio::piped());
-
-                let mut child = match cmd.spawn() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        let _ = app.emit(
-                            "track-status",
-                            serde_json::json!({
-                                "id": track_id,
-                                "status": "Error",
-                                "error_message": format!("Échec spawn yt-dlp: {}", e)
-                            }),
-                        );
-                        emit_log(&app, "error", &format!("Échec spawn {}: {}", track.title, e));
-                        return;
-                    }
-                };
-
-                if let Some(stdout) = child.stdout.take() {
-                    let mut reader = BufReader::new(stdout).lines();
-                    while let Ok(Some(line)) = reader.next_line().await {
-                        if is_canc.load(Ordering::SeqCst) {
-                            let _ = child.kill().await;
-                            return;
-                        }
-
-                        if line.starts_with("download:") {
-                            let parts: Vec<&str> = line[9..].split('|').collect();
-                            if parts.len() >= 2 {
-                                let percent_str = parts[0].replace('%', "").trim().to_string();
-                                let percent: f64 = percent_str.parse().unwrap_or(0.0);
-                                let speed = parts[1].trim().to_string();
-
-                                let _ = app.emit(
-                                    "track-status",
-                                    serde_json::json!({
-                                        "id": track_id,
-                                        "status": "Downloading",
-                                        "progress": percent,
-                                        "speed": speed
-                                    }),
-                                );
-
-                                let current_comp = *completed.lock().await;
-                                let _ = app.emit(
-                                    "download-progress",
-                                    GlobalProgress {
-                                        completed_tracks: current_comp,
-                                        total_tracks,
-                                        current_speed: Some(speed),
-                                        current_active_title: Some(track.title.clone()),
-                                    },
-                                );
-                            }
-                        } else if line.contains("[ExtractAudio]") || line.contains("[EmbedThumbnail]") {
-                            let _ = app.emit(
-                                "track-status",
-                                serde_json::json!({
-                                    "id": track_id,
-                                    "status": "Converting",
-                                    "progress": 95.0,
-                                    "speed": ""
-                                }),
-                            );
-                            emit_log(&app, "ffmpeg", &format!("Conversion MP3 320k / Tags : {}", track.title));
-                        }
-                    }
+                // 3 Stratégies de téléchargement en cascade
+                struct Strategy {
+                    name: &'static str,
+                    extractor_client: Option<&'static str>,
+                    format_spec: Option<&'static str>,
+                    embed_thumbnail: bool,
+                    extra_flags: Vec<&'static str>,
                 }
 
-                let status = child.wait().await;
-                match status {
-                    Ok(s) if s.success() => {
-                        let mut comp = completed.lock().await;
-                        *comp += 1;
-                        let count = *comp;
+                let strategies = [
+                    Strategy {
+                        name: "Standard (Haute fidélité)",
+                        extractor_client: None,
+                        format_spec: None,
+                        embed_thumbnail: true,
+                        extra_flags: vec![],
+                    },
+                    Strategy {
+                        name: "Client Android & Format ba/b",
+                        extractor_client: Some("youtube:player_client=android,web"),
+                        format_spec: Some("ba/b"),
+                        embed_thumbnail: true,
+                        extra_flags: vec!["--user-agent", "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"],
+                    },
+                    Strategy {
+                        name: "Haute Résilience (Flux direct sans cover)",
+                        extractor_client: Some("youtube:player_client=ios,android"),
+                        format_spec: Some("bestaudio/best"),
+                        embed_thumbnail: false, // Évite les crashs de conversion ID3 WebP/AVIF mutagen/ffmpeg
+                        extra_flags: vec!["--no-check-certificates", "--prefer-free-formats", "--retries", "5"],
+                    },
+                ];
+
+                let mut succeeded = false;
+                let mut last_error = String::from("Erreur inconnue");
+
+                for (attempt_idx, strat) in strategies.iter().enumerate() {
+                    if is_canc.load(Ordering::SeqCst) {
+                        break;
+                    }
+
+                    if attempt_idx > 0 {
+                        let status_tag = if attempt_idx == 1 {
+                            "Tentative 2 (Android)..."
+                        } else {
+                            "Tentative 3 (Résilience)..."
+                        };
 
                         let _ = app.emit(
                             "track-status",
                             serde_json::json!({
                                 "id": track_id,
-                                "status": "Completed",
-                                "progress": 100.0,
+                                "status": status_tag,
+                                "progress": 5.0,
                                 "speed": ""
                             }),
                         );
 
-                        let _ = app.emit(
-                            "download-progress",
-                            GlobalProgress {
-                                completed_tracks: count,
-                                total_tracks,
-                                current_speed: None,
-                                current_active_title: None,
-                            },
+                        emit_log(
+                            &app,
+                            "warn",
+                            &format!(
+                                "⚠️ [Tentative {}/3] Échec pour \"{}\". Nouvelle tentative via : {}",
+                                attempt_idx + 1,
+                                track.title,
+                                strat.name
+                            ),
                         );
-
-                        emit_log(&app, "success", &format!("Terminé ({}/{}): {}", count, total_tracks, track.title));
-                    }
-                    _ => {
+                    } else {
+                        // Notification début de téléchargement normal
                         let _ = app.emit(
                             "track-status",
                             serde_json::json!({
                                 "id": track_id,
-                                "status": "Error",
-                                "error_message": "Erreur lors de la conversion ou du téléchargement"
+                                "status": "Downloading",
+                                "progress": 0.0,
+                                "speed": "0 KiB/s"
                             }),
                         );
-                        emit_log(&app, "error", &format!("Erreur sur la piste: {}", track.title));
+                        emit_log(&app, "ytdlp", &format!("Démarrage: {}", track.title));
                     }
+
+                    let mut cmd = Command::new(&ytdlp);
+                    cmd.creation_flags(CREATE_NO_WINDOW);
+
+                    let ffmpeg_str = ffmpeg_dir.to_string_lossy().to_string();
+                    let album_arg = format!("{}:%(album)s", album_name);
+                    let out_arg = format!("{}/%(title)s.%(ext)s", out_folder);
+
+                    let mut args = vec![
+                        "--ffmpeg-location".to_string(),
+                        ffmpeg_str,
+                        "-x".to_string(),
+                        "--audio-format".to_string(),
+                        "mp3".to_string(),
+                        "--audio-quality".to_string(),
+                        quality.clone(),
+                        "--embed-metadata".to_string(),
+                        "--add-metadata".to_string(),
+                        "--parse-metadata".to_string(),
+                        album_arg,
+                        "-o".to_string(),
+                        out_arg,
+                        "--newline".to_string(),
+                        "--progress-template".to_string(),
+                        "download:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s".to_string(),
+                        "--no-playlist".to_string(),
+                    ];
+
+                    if strat.embed_thumbnail {
+                        args.push("--embed-thumbnail".to_string());
+                    }
+
+                    if let Some(client) = strat.extractor_client {
+                        args.push("--extractor-args".to_string());
+                        args.push(client.to_string());
+                    }
+
+                    if let Some(fmt) = strat.format_spec {
+                        args.push("--format".to_string());
+                        args.push(fmt.to_string());
+                    }
+
+                    for flag in &strat.extra_flags {
+                        args.push(flag.to_string());
+                    }
+
+                    args.push(track_url.clone());
+                    cmd.args(&args);
+
+                    cmd.stdout(std::process::Stdio::piped());
+                    cmd.stderr(std::process::Stdio::piped());
+
+                    let mut child = match cmd.spawn() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            last_error = format!("Échec spawn: {}", e);
+                            continue;
+                        }
+                    };
+
+                    if let Some(stdout) = child.stdout.take() {
+                        let mut reader = BufReader::new(stdout).lines();
+                        while let Ok(Some(line)) = reader.next_line().await {
+                            if is_canc.load(Ordering::SeqCst) {
+                                let _ = child.kill().await;
+                                return;
+                            }
+
+                            if line.starts_with("download:") {
+                                let parts: Vec<&str> = line[9..].split('|').collect();
+                                if parts.len() >= 2 {
+                                    let percent_str = parts[0].replace('%', "").trim().to_string();
+                                    let percent: f64 = percent_str.parse().unwrap_or(0.0);
+                                    let speed = parts[1].trim().to_string();
+
+                                    let _ = app.emit(
+                                        "track-status",
+                                        serde_json::json!({
+                                            "id": track_id,
+                                            "status": if attempt_idx > 0 { format!("Tentative {} ({}%)", attempt_idx + 1, percent.min(100.0) as i64) } else { "Downloading".to_string() },
+                                            "progress": percent,
+                                            "speed": speed
+                                        }),
+                                    );
+
+                                    let current_comp = *completed.lock().await;
+                                    let _ = app.emit(
+                                        "download-progress",
+                                        GlobalProgress {
+                                            completed_tracks: current_comp,
+                                            total_tracks,
+                                            current_speed: Some(speed),
+                                            current_active_title: Some(track.title.clone()),
+                                        },
+                                    );
+                                }
+                            } else if line.contains("[ExtractAudio]") || line.contains("[EmbedThumbnail]") {
+                                let _ = app.emit(
+                                    "track-status",
+                                    serde_json::json!({
+                                        "id": track_id,
+                                        "status": "Converting",
+                                        "progress": 95.0,
+                                        "speed": ""
+                                    }),
+                                );
+                                emit_log(&app, "ffmpeg", &format!("Conversion MP3 320k / Tags : {}", track.title));
+                            }
+                        }
+                    }
+
+                    let status = child.wait().await;
+                    match status {
+                        Ok(s) if s.success() => {
+                            succeeded = true;
+                            let mut comp = completed.lock().await;
+                            *comp += 1;
+                            let count = *comp;
+
+                            let _ = app.emit(
+                                "track-status",
+                                serde_json::json!({
+                                    "id": track_id,
+                                    "status": "Completed",
+                                    "progress": 100.0,
+                                    "speed": ""
+                                }),
+                            );
+
+                            let _ = app.emit(
+                                "download-progress",
+                                GlobalProgress {
+                                    completed_tracks: count,
+                                    total_tracks,
+                                    current_speed: None,
+                                    current_active_title: None,
+                                },
+                            );
+
+                            if attempt_idx > 0 {
+                                emit_log(
+                                    &app,
+                                    "success",
+                                    &format!(
+                                        "✅ Succès pour \"{}\" via la méthode de secours [{}] ({}/{}) !",
+                                        track.title, strat.name, count, total_tracks
+                                    ),
+                                );
+                            } else {
+                                emit_log(&app, "success", &format!("Terminé ({}/{}): {}", count, total_tracks, track.title));
+                            }
+                            break;
+                        }
+                        Ok(s) => {
+                            last_error = format!("Code de sortie yt-dlp: {:?}", s.code());
+                        }
+                        Err(e) => {
+                            last_error = format!("Erreur child wait: {}", e);
+                        }
+                    }
+                }
+
+                if !succeeded && !is_canc.load(Ordering::SeqCst) {
+                    let _ = app.emit(
+                        "track-status",
+                        serde_json::json!({
+                            "id": track_id,
+                            "status": "Error",
+                            "error_message": format!("Échec après 3 méthodes alternatives ({})", last_error)
+                        }),
+                    );
+                    emit_log(
+                        &app,
+                        "error",
+                        &format!("❌ Échec définitif pour \"{}\" après 3 méthodes alternatives", track.title),
+                    );
                 }
             });
 

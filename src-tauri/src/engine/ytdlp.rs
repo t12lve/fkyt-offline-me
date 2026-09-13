@@ -77,14 +77,36 @@ pub async fn inspect_url(
         url,
     ]);
 
-    let output = cmd
+    let mut output = cmd
         .output()
         .await
         .map_err(|e| format!("Impossible d'exécuter yt-dlp : {}", e))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("yt-dlp a renvoyé une erreur : {}", stderr));
+        // Tentative 2 avec le client android,web pour contourner les blocages web YouTube
+        let mut fallback_cmd = Command::new(ytdlp_bin);
+        fallback_cmd.creation_flags(CREATE_NO_WINDOW);
+        fallback_cmd.args(&[
+            "--dump-single-json",
+            "--flat-playlist",
+            "--no-warnings",
+            "--skip-download",
+            "--extractor-args",
+            "youtube:player_client=android,web",
+            url,
+        ]);
+
+        if let Ok(fallback_output) = fallback_cmd.output().await {
+            if fallback_output.status.success() {
+                output = fallback_output;
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("yt-dlp a renvoyé une erreur : {}", stderr));
+            }
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("yt-dlp a renvoyé une erreur : {}", stderr));
+        }
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);

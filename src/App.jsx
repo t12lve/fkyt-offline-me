@@ -5,7 +5,6 @@ import { Header } from './components/Header';
 import { UrlInputCard } from './components/UrlInputCard';
 import { PlaylistQueue } from './components/PlaylistQueue';
 import { PlaylistOverview } from './components/PlaylistOverview';
-import { ProgressBar } from './components/ProgressBar';
 import { TrackList } from './components/TrackList';
 import { ActionFooter } from './components/ActionFooter';
 import { LogDrawer } from './components/LogDrawer';
@@ -85,8 +84,8 @@ export function App() {
       <div className="fixed bottom-10 right-1/4 w-96 h-96 bg-pink-600/10 rounded-full blur-3xl pointer-events-none -z-10" />
       <div className="fixed top-1/2 right-10 w-72 h-72 bg-fuchsia-600/10 rounded-full blur-3xl pointer-events-none -z-10" />
 
-      {/* 3. Main Scrollable App Container */}
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 md:px-8 py-5 max-w-6xl w-full mx-auto flex flex-col">
+      {/* 3. Main Desktop Workstation Workspace (Fixed 2 Columns, No Global Scroll) */}
+      <div className="flex-1 min-h-0 px-4 pt-2 pb-3 sm:px-6 md:px-8 flex flex-col overflow-hidden">
         {/* Header with Navigation Tabs & Performance Specs Badge */}
         <Header 
           binaryStatus={binaryStatus} 
@@ -97,26 +96,27 @@ export function App() {
           onOpenThreadModal={() => setIsThreadModalOpen(true)}
         />
 
-        {/* Tab 1: Téléchargeur Playlists */}
+        {/* Tab 1: Téléchargeur Playlists en 2 Colonnes Fixes */}
         {activeTab === 'downloader' && (
-          <>
-            {/* URL Input & Add to Queue + Quality Selector */}
-            <UrlInputCard
-              url={url}
-              setUrl={setUrl}
-              destinationDir={destinationDir}
-              onSelectFolder={selectFolder}
-              onInspectPlaylist={handleAddToQueue}
-              onAddToQueue={handleAddToQueue}
-              audioQuality={audioQuality}
-              setAudioQuality={setAudioQuality}
-              isInspecting={isInspecting}
-              isDownloading={isDownloading || isQueueRunning}
-              error={error}
-            />
+          <div className="flex-1 min-h-0 flex gap-4 lg:gap-5 overflow-hidden">
+            {/* Colonne GAUCHE (Spacieuse ~460px - 530px) : Blocs Durs Saisie, Queue, Actions */}
+            <aside className="w-[460px] lg:w-[490px] xl:w-[530px] flex flex-col gap-3 shrink-0 h-full overflow-hidden">
+              {/* Bloc Dur 1: Saisie URL & Configuration */}
+              <UrlInputCard
+                url={url}
+                setUrl={setUrl}
+                destinationDir={destinationDir}
+                onSelectFolder={selectFolder}
+                onInspectPlaylist={handleAddToQueue}
+                onAddToQueue={handleAddToQueue}
+                audioQuality={audioQuality}
+                setAudioQuality={setAudioQuality}
+                isInspecting={isInspecting}
+                isDownloading={isDownloading || isQueueRunning}
+                error={error}
+              />
 
-            {/* Multi-Playlist Queue List */}
-            {queue && queue.length > 0 && (
+              {/* Bloc Dur 2: File d'Attente Playlists (Bloc permanent avec état vide anticipé) */}
               <PlaylistQueue
                 queue={queue}
                 currentQueueIndex={currentQueueIndex}
@@ -126,57 +126,55 @@ export function App() {
                 onClearQueue={clearQueue}
                 isQueueRunning={isQueueRunning}
               />
-            )}
 
-            {/* Currently Selected Playlist Overview */}
-            {playlist && (
+              {/* Bloc Dur 3: Contrôles & Actions (Ancré au bas de la colonne gauche) */}
+              <ActionFooter
+                canStart={canStart}
+                isDownloading={isDownloading}
+                isQueueRunning={isQueueRunning}
+                hasCompleted={hasCompleted}
+                queueLength={queue.length}
+                onStartQueue={handleStart}
+                onCancelDownload={cancelDownload}
+                onOpenFolder={() => openFolder()}
+                onReset={handleReset}
+              />
+            </aside>
+
+            {/* Colonne DROITE (Flexible, remplit tout l'espace restant) : Blocs Durs Overview + Workstation TrackList */}
+            <main className="flex-1 min-w-0 flex flex-col gap-3 h-full overflow-hidden">
+              {/* Bloc Dur 1: Playlist Active & Progression en direct (Bloc permanent avec état vide anticipé) */}
               <PlaylistOverview 
                 playlist={playlist} 
-                fullOutputPath={fullOutputPath} 
-              />
-            )}
-
-            {/* Progress Bar (Dual: Active Playlist + Queue) */}
-            {(isDownloading || isQueueRunning || progress.completed_tracks > 0) && (
-              <ProgressBar
+                fullOutputPath={fullOutputPath}
                 progress={progress}
                 totalTracks={tracks.length}
                 isDownloading={isDownloading || isQueueRunning}
                 queue={queue}
                 currentQueueIndex={currentQueueIndex}
               />
-            )}
 
-            {/* Selected Playlist Tracks Queue */}
-            {tracks && tracks.length > 0 && (
-              <TrackList tracks={tracks} />
-            )}
-
-            {/* Action Controls */}
-            <ActionFooter
-              canStart={canStart}
-              isDownloading={isDownloading}
-              isQueueRunning={isQueueRunning}
-              hasCompleted={hasCompleted}
-              queueLength={queue.length}
-              onStartQueue={handleStart}
-              onCancelDownload={cancelDownload}
-              onOpenFolder={() => openFolder()}
-              onReset={handleReset}
-            />
-          </>
+              {/* Bloc Dur 2: Workstation des Titres de la Playlist (Remplit la hauteur restante avec scroll interne) */}
+              <TrackList 
+                tracks={tracks} 
+                isDownloading={isDownloading || isQueueRunning}
+              />
+            </main>
+          </div>
         )}
 
         {/* Tab 2: Compresseur & Gain d'Espace */}
         {activeTab === 'compressor' && (
-          <AudioCompressorTab 
-            onOpenFolder={openFolder} 
-            convertThreads={convertThreads} 
-          />
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 custom-scrollbar">
+            <AudioCompressorTab 
+              onOpenFolder={openFolder} 
+              convertThreads={convertThreads} 
+            />
+          </div>
         )}
 
-        {/* Debug Logs Drawer (collapsible) */}
-        <div className="mt-auto pt-4 pb-2">
+        {/* Docked Debug Log Drawer (Bouton pliable en bas, n'altère pas la grille) */}
+        <div className="mt-2 shrink-0">
           <LogDrawer logs={logs} onClearLogs={clearLogs} />
         </div>
       </div>

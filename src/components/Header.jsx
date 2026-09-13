@@ -24,7 +24,7 @@ export function Header({
   const cores = systemSpecs?.logical_cores || 4;
 
   return (
-    <header className="relative w-full py-3.5 px-5 mb-5 glass-panel rounded-2xl border-psylocke-border shadow-psionic">
+    <header className="relative w-full py-2.5 px-4 mb-2.5 glass-panel rounded-2xl border-psylocke-border shadow-psionic shrink-0">
       <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Brand & Psionic Motif */}
         <div className="flex items-center gap-3 shrink-0">
