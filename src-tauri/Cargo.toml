@@ -1,0 +1,24 @@
+[package]
+name = "fkyt-offline-me"
+version = "1.0.0"
+description = "fkYT offline me - Extraction audio et conversion MP3 320kbps de playlists"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "fkyt_offline_me_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+dirs = "5"
+regex = "1"
+chrono = "0.4"
+open = "5"

@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Production builds & dist
+dist/
+dist-exe/
+build/
+
+# Rust build outputs
+src-tauri/target/
+target/
+
+# Binaries (uploaded directly to GitHub Releases)
+src-tauri/bin/*.exe
+dist-exe/
+*.exe
+
+# Logs and environment
+*.log
+crash.log
+.env
+.env.local
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
